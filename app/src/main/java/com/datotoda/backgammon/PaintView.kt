@@ -9,10 +9,14 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.absoluteValue
 import kotlin.math.min
-import kotlin.random.Random
 
 
 class PaintView constructor(context: Context) : View(context) {
+    private var onShowDiceListener: (() -> Unit)? = null
+    private var onAITurnListener: (() -> Unit)? = null
+    private var onRollDiceListener: (() -> Unit)? = null
+    private var onMakeMoveListener: (() -> Unit)? = null
+
     private var boardPaint: Paint
     private var rocksPaint: Paint
     private var dicePaint: Paint
@@ -27,12 +31,17 @@ class PaintView constructor(context: Context) : View(context) {
     private var p1deadRocksRect: RectF
     private var p2deadRocksRect: RectF
     private var diceRollButtonRect: RectF
+    private var diceRollAIButtonRect: RectF
     private var boardTriangles: ArrayList<BoardTriangle>
-    private var rocks: ArrayList<Rock>
-    private var df_is_active: DFIsActive
+    var rocks: ArrayList<Rock>
+    private var dfIsActive: DFIsActive
     private var dices: ArrayList<Dice>
 
-    private var p1_turn: Boolean = false
+    var userTurn: Boolean = true
+    private lateinit var validActionsList: List<List<List<Int>>>
+    private lateinit var validActionsIndexes: ArrayList<Int>
+    lateinit var selectedAction: ArrayList<List<Int>>
+    private var state: State = State.NONE
 
     init {
         val displayMetrics = DisplayMetrics()
@@ -102,6 +111,12 @@ class PaintView constructor(context: Context) : View(context) {
             innerBoardRect.right - d,
             middleBoardRect.centerY() + d / 1.5f
         )
+        diceRollAIButtonRect = RectF(
+            innerBoardRect.left + d,
+            middleBoardRect.centerY() - d / 1.5f,
+            middleBoardRect.left - d,
+            middleBoardRect.centerY() + d / 1.5f
+        )
 
 
         boardTriangles  = ArrayList(24)
@@ -118,19 +133,14 @@ class PaintView constructor(context: Context) : View(context) {
         }
 
         rocks  = ArrayList(30)
-//        fillRocksFromArray(arrayListOf(
-//            -2, 0, 0, 0, 0, 5,
-//            0, 3, 0, 0, 0, -5,
-//            5, 0, 0, 0, -3, 0,
-//            -5, 0, 0, 0, 0, 2
-//        ))
         fillRocksFromArray(arrayListOf(
-            0, 0, 0, 0, 0, 6,
-            0, 2, 0, 0, 0, -4,
-            7, 0, 0, 0, -2, 0,
-            -9, 0, 0, 0, 0, 0
+            -2, 0, 0, 0, 0, 5,
+            0, 3, 0, 0, 0, -5,
+            5, 0, 0, 0, -3, 0,
+            -5, 0, 0, 0, 0, 2,
+            0, 0, 0, 0  // dead white, dead black, off white, off black
         ))
-        df_is_active = DFIsActive()
+        dfIsActive = DFIsActive()
         dices = ArrayList(4)
     }
 
@@ -140,67 +150,118 @@ class PaintView constructor(context: Context) : View(context) {
 
         drawBoard(canvas)
         drawRocks(canvas)
-        drawDeadRock(false, df_is_active.p1DeadIsActive, canvas)
-        drawDeadRock(true, df_is_active.p2DeadIsActive, canvas)
-        drawFinishedRock(false, df_is_active.p1FinishedIsActive, canvas)
-        drawFinishedRock(true, df_is_active.p2FinishedIsActive, canvas)
-        drawDices(p1_turn, canvas)
-        if (!p1_turn){
+        drawDeadRock(false, dfIsActive.p1DeadIsActive, canvas)
+        drawDeadRock(true, dfIsActive.p2DeadIsActive, canvas)
+        drawFinishedRock(false, dfIsActive.p1FinishedIsActive, canvas)
+        drawFinishedRock(true, dfIsActive.p2FinishedIsActive, canvas)
+
+        drawDices(userTurn, canvas)
+        if (!userTurn){
             drawRollDiceButton(canvas)
+        } else if (dices.none { !it.done }){
+            drawRollDiceAIButton(canvas)
         }
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-
         if (event.action == MotionEvent.ACTION_DOWN) {
-            println("" + event.x + " " + event.y)
-//            boardTriangles[7].active = ! boardTriangles[7].active
-//            boardTriangles[8].active = ! boardTriangles[8].active
-//            boardTriangles[14].active = ! boardTriangles[14].active
-//            df_is_active.p1FinishedIsActive = ! df_is_active.p1FinishedIsActive
-//            df_is_active.p2DeadIsActive = ! df_is_active.p2DeadIsActive
-
-            rocks[7].dead = ! rocks[7].dead
-            rocks[2].dead = ! rocks[2].dead
-            rocks[3].dead = ! rocks[3].dead
-//            rocks[27].dead = ! rocks[27].dead
-//            rocks[25].dead = ! rocks[25].dead
-//            rocks[26].finished = ! rocks[26].finished
-//            rocks[0].finished = ! rocks[0].finished
-
-//            rocks[4].active = ! rocks[4].active
-//            rocks[22].active = ! rocks[22].active
-//            rocks[5].active = ! rocks[5].active
-//            rocks[24].active = ! rocks[24].active
-
-            if (!p1_turn && isClicked(event, diceRollButtonRect)) {
-                rollDices()
-                p1_turn = true
-            }
-            else if (isClicked(event, diceRollButtonRect)) {
-                rollDices()
-                p1_turn = false
+            if (!userTurn && isClicked(event, diceRollButtonRect)) {
+                userTurn = true
+                onRollDiceListener?.invoke()
+            } else if (userTurn && isClicked(event, diceRollAIButtonRect)) {
+                userTurn = false
+                onAITurnListener?.invoke()
             }
 
-            if (isClicked(event, p1deadRocksRect)) {
-                df_is_active.reset()
-                df_is_active.p1DeadIsActive = true
-            } else if (isClicked(event, p2deadRocksRect)) {
-                df_is_active.reset()
-                df_is_active.p2DeadIsActive = true
-            } else if (isClicked(event, p1rocksMiddleBoardRect)) {
-                df_is_active.reset()
-                df_is_active.p1FinishedIsActive = true
-            } else if (isClicked(event, p2rocksMiddleBoardRect)) {
-                df_is_active.reset()
-                df_is_active.p2FinishedIsActive = true
-            }
+            else if (state == State.POSSIBLE_MOVES && isClicked(event, p1deadRocksRect)) {
+                dfIsActive.reset()
+                dfIsActive.p1DeadIsActive = true
+                validActionsList
+                    .filterIndexed { _index, _ ->
+                        validActionsIndexes.contains(
+                            _index
+                        )
+                    }
+                    .filter { it[selectedAction.count()].first() == 24 }
+                    .map { it[selectedAction.count()].last() }
+                    .distinct()
+                    .forEach { boardTriangles[it].active = true }
+                state = State.SELECTED_ROCK
+            } else if (state == State.SELECTED_ROCK && dfIsActive.p1FinishedIsActive && isClicked(event, p1rocksMiddleBoardRect)) {
+                selectedAction.add(listOf(rocks.first { it.active }.triangleIndex, 26))
+                makeMove(selectedAction.last())
+                clearActiveRocks()
+                clearActiveTriangles()
+                validActionsIndexes = validActionsList.indices.filter { validActionsIndexes.contains(it) && validActionsList[it][selectedAction.lastIndex] == selectedAction.last() } as ArrayList<Int>
 
-            boardTriangles.forEachIndexed { index, triangle ->
-                if (isClicked(event, triangle.rectF)) {
-                    clearActiveRocks()
-                    setActiveRock(index, true)
+                if (validActionsIndexes.count() == 1 && selectedAction.count() == validActionsList[validActionsIndexes.first()].count()) {
+                    selectedAction = validActionsList[validActionsIndexes.first()] as ArrayList<List<Int>>
+                    onMakeMoveListener?.invoke()
+                    dices.forEach { it.done = true }
+                } else {
+                    validActionsList
+                        .filterIndexed { _index, _ ->
+                            validActionsIndexes.contains(
+                                _index
+                            )
+                        }
+                        .map { it[selectedAction.count()].first() }
+                        .distinct()
+                        .forEach { _index ->
+                            setActiveRock(_index)
+                        }
+                }
+                state = State.POSSIBLE_MOVES
+
+            } else {
+                boardTriangles.forEachIndexed { index, triangle ->
+                    if (isClicked(event, triangle.rectF)) {
+                        // select rock
+                        if (state == State.POSSIBLE_MOVES && getRock(index)?.active == true) {
+                            clearActiveRocks()
+                            setActiveRock(index)
+                            validActionsList
+                                .filterIndexed { _index, _ ->
+                                    validActionsIndexes.contains(
+                                        _index
+                                    )
+                                }
+                                .filter { it[selectedAction.count()].first() == index }
+                                .map { it[selectedAction.count()].last() }
+                                .distinct()
+                                .forEach { if (it == 26) dfIsActive.p1FinishedIsActive = true else boardTriangles[it].active = true }
+                            state = State.SELECTED_ROCK
+                        }
+                        // make move
+                        else if (state == State.SELECTED_ROCK && boardTriangles[index].active) {
+                            selectedAction.add(listOf(rocks.first { it.active }.triangleIndex, index))
+                            makeMove(selectedAction.last())
+                            clearActiveRocks()
+                            clearActiveTriangles()
+                            validActionsIndexes =
+                                validActionsList.indices.filter { validActionsIndexes.contains(it) && validActionsList[it][selectedAction.lastIndex] == selectedAction.last() } as ArrayList<Int>
+
+                            if (validActionsIndexes.count() == 1 && selectedAction.count() == validActionsList[validActionsIndexes.first()].count()) {
+                                selectedAction = validActionsList[validActionsIndexes.first()] as ArrayList<List<Int>>
+                                onMakeMoveListener?.invoke()
+                                dices.forEach { it.done = true }
+                            } else {
+                                validActionsList
+                                    .filterIndexed { _index, _ ->
+                                        validActionsIndexes.contains(
+                                            _index
+                                        )
+                                    }
+                                    .map { it[selectedAction.count()].first() }
+                                    .distinct()
+                                    .forEach { _index ->
+                                        setActiveRock(_index)
+                                    }
+                            }
+                            state = State.POSSIBLE_MOVES
+                        }
+                    }
                 }
             }
 
@@ -243,17 +304,14 @@ class PaintView constructor(context: Context) : View(context) {
     )
 
     private fun drawRock(x: Float, y: Float, text: String, is_black: Boolean, is_active: Boolean, canvas: Canvas) {
-        var r = d / 2f
+        val r = d / 2f
         val cx = x + r
         val cy = y - r
         rocksPaint.color = resources.getColor(if (is_black) R.color.black_rock else R.color.white_rock)
 
         if (is_active) {
-            val color = rocksPaint.color
             rocksPaint.color = resources.getColor(R.color.active_rock)
-//            canvas.drawCircle(cx, cy, r, rocksPaint)
-//            r *= 0.8f
-//            rocksPaint.color = color
+
         }
         canvas.drawCircle(cx, cy, r, rocksPaint)
 
@@ -397,60 +455,162 @@ class PaintView constructor(context: Context) : View(context) {
             dicePaint
         )
     }
+    private fun drawRollDiceAIButton(canvas: Canvas) {
+        dicePaint.color = resources.getColor(R.color.dice_roll_button)
+        canvas.drawRoundRect(
+            diceRollAIButtonRect,
+            d / 3,
+            d / 3,
+            dicePaint
+        )
+        dicePaint.color = resources.getColor(R.color.dice_roll_button_text)
+        dicePaint.textSize = d / 1.5f
+        dicePaint.textAlign = Paint.Align.CENTER
+        canvas.drawText(
+            "AI Turn",
+            diceRollAIButtonRect.centerX(),
+            diceRollAIButtonRect.centerY() - (dicePaint.descent() + dicePaint.ascent()) / 2,
+            dicePaint
+        )
+    }
 
     private fun fillRocksFromArray(rocksArrayList: ArrayList<Int>) {
         rocks.clear()
         rocksArrayList.forEachIndexed { index, i ->
-            if (i != 0) {
+            if (i != 0 && index < 24) {
                 val text = if (i.absoluteValue > 5) "+${i.absoluteValue - 5}" else ""
-                val is_black = i < 0
+                val isBlack = i < 0
                 val inverted = index > 11
                 val diffY = if (inverted) d else -d
                 val triangleX = boardTriangles[index].x
                 var triangleY = boardTriangles[index].y + if (inverted) d else 0f
 
-                for (j in 1..min(5, i.absoluteValue)) {
+                for (j in 1..i.absoluteValue) {
                     rocks.add(Rock(
                         x = triangleX,
                         y = triangleY,
                         triangleIndex = index,
-                        is_black = is_black,
-                        text = if (j == 5) text else "",
+                        is_black = isBlack,
+                        text = if (j >= 5) text else "",
                         active = false,
                         dead = false,
                         finished = false
                     ))
-                    triangleY += diffY
+                    if (j < 5) triangleY += diffY
+                }
+            } else if (i != 0) {
+                for (j in 1.. i.absoluteValue) {
+                    rocks.add(Rock(
+                        x = 0f,
+                        y = 0f,
+                        triangleIndex = index,
+                        is_black = index % 2 == 1,  // 25, 27
+                        text = "",
+                        active = false,
+                        dead = index == 24 || index == 25,
+                        finished = index == 26 || index == 27
+                    ))
                 }
             }
         }
     }
 
-    private fun setActiveRock(triangleIndex: Int, active: Boolean) {
-        rocks.filter { rock -> rock.triangleIndex == triangleIndex }.lastOrNull()?.active = active
+    private fun getRocksArray(): ArrayList<Int> {
+        val tempRocks: ArrayList<Int> = ArrayList(List(28) { 0 })
+        rocks.forEach { tempRocks[it.triangleIndex] += if(it.is_black) -1 else 1 }
+        return tempRocks
     }
 
-    private fun clearActiveRocks() = rocks.forEach { it.active = false }
-    private fun clearActiveTriangles() = boardTriangles.forEach { it.active = false }
+    private fun setActiveRock(triangleIndex: Int) {
+        rocks.lastOrNull { rock -> rock.triangleIndex == triangleIndex }?.active = true
+    }
 
-    private fun rollDices() {
+    private fun getRock(triangleIndex: Int) = rocks.lastOrNull { rock -> rock.triangleIndex == triangleIndex }
+
+
+    private fun clearActiveRocks() = rocks.forEach { it.active = false }.also { dfIsActive.reset() }
+    private fun clearActiveTriangles() = boardTriangles.forEach { it.active = false }.also { dfIsActive.reset() }
+
+    fun rollDices(d1: Int, d2: Int) {
         dices.clear()
-        val d1 = (Random.nextInt() % 6).absoluteValue + 1
-        val d2 = (Random.nextInt() % 6).absoluteValue + 1
+        val td1 = d1.absoluteValue
+        val td2 = d2.absoluteValue
 
-        dices.add(Dice(d1, done = Random.nextBoolean()))
-        dices.add(Dice(d2, done = Random.nextBoolean()))
-        if (d1 == d2) {
-            dices.add(Dice(d1, done = Random.nextBoolean()))
-            dices.add(Dice(d2, done = Random.nextBoolean()))
+        dices.add(Dice(td1))
+        dices.add(Dice(td2))
+        if (td1 == td2) {
+            dices.add(Dice(td1))
+            dices.add(Dice(td2))
         }
     }
+
+    fun showPossibleMoves(_validActionsList: List<List<List<Int>>>) {
+        validActionsList = _validActionsList
+        validActionsIndexes = ArrayList((validActionsList.indices).toList())
+        selectedAction = ArrayList(4)
+        clearActiveRocks()
+        validActionsList.map { it.first().first() }.distinct().forEach { index ->
+            setActiveRock(index)
+        }
+        state = State.POSSIBLE_MOVES
+
+        if (validActionsIndexes.isEmpty()) {
+            onMakeMoveListener?.invoke()
+            dices.forEach { it.done = true }
+        }
+    }
+
+    private fun makeMove(move: List<Int>) {
+        val tempRock = getRock(move.first())
+
+        if (tempRock != null) {
+            val tempRocks = getRocksArray()
+
+            if (tempRock.is_black && tempRocks[move.last()] == 1) {
+                tempRocks[24] += 1
+                tempRocks[move.last()] = 0
+            }
+            else if (!tempRock.is_black && tempRocks[move.last()] == -1) {
+                tempRocks[25] -= 1
+                tempRocks[move.last()] = 0
+            }
+            if (tempRock.is_black) {
+                tempRocks[move.first()] += 1
+                tempRocks[move.last()] -= 1
+            }
+            else {
+                tempRocks[move.first()] -= 1
+                tempRocks[move.last()] += 1
+            }
+
+            fillRocksFromArray(tempRocks)
+        }
+
+    }
+
+    fun makeMoves(moves: List<List<Int>>) = moves.forEach{ move -> makeMove(move)}
 
     private fun isClicked(event: MotionEvent, rectF: RectF): Boolean =
         rectF.left <= event.x
                 && event.x <= rectF.right
                 && rectF.top <= event.y
                 && event.y <= rectF.bottom
+
+    fun setShowDice(printListener: (() -> Unit)?) {
+        this.onShowDiceListener = printListener
+    }
+
+    fun setAITurnListener(printListener: (() -> Unit)?) {
+        this.onAITurnListener = printListener
+    }
+
+    fun setRollDice(printListener: (() -> Unit)?) {
+        this.onRollDiceListener = printListener
+    }
+
+    fun setMakeMoveListener(printListener: (() -> Unit)?) {
+        this.onMakeMoveListener = printListener
+    }
 
 }
 
@@ -495,3 +655,9 @@ data class Dice(
     var value: Int,
     var done: Boolean = false
 )
+
+enum class State(val state: Int) {
+    NONE(0),
+    POSSIBLE_MOVES(1),
+    SELECTED_ROCK(2);
+}

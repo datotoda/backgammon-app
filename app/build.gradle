@@ -42,7 +42,7 @@ android {
 
 chaquopy {
     defaultConfig {
-        buildPython "C:/Users/Saba/AppData/Local/Programs/Python/Python39/python.exe"
+        buildPython "where python".execute().text.trim().split("\n").first().trim()
 
         pip {
             install "gym==0.14.0"       // Gym library
